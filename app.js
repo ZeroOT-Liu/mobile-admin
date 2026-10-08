@@ -29,11 +29,12 @@
     prj: { icon: '📋', name: '项目后台', hint: '项目 / 任务 / 笔记 / 代码片段（表名 projects）', url: 'https://uwgqflcjuixmdhgzlvmb.supabase.co' }
   };
 
+  // 底色统一为中性灰，四项只区分强调色 / 明暗
   var THEMES = [
-    { id: 'warm', name: '暖白' },
-    { id: 'celadon', name: '青瓷' },
-    { id: 'mist', name: '雾蓝' },
-    { id: 'night', name: '深夜' }
+    { id: 'warm', name: '靛蓝' },
+    { id: 'celadon', name: '松绿' },
+    { id: 'mist', name: '雾紫' },
+    { id: 'night', name: '深色' }
   ];
 
   var COLOR = { ok: 'var(--success)', err: 'var(--danger)', warn: 'var(--warn)', info: 'var(--accent)', muted: 'var(--muted)' };
@@ -896,7 +897,7 @@
     return '<div class="bar"><i style="width:' + Math.max(0, Math.min(100, numOr(pct, 0))) + '%"></i></div>';
   }
 
-  function banner(text, type) { return '<div class="banner ' + (type || 'info') + '">' + (text) + '</div>'; }
+  function banner(text, type) { return '<div class="banner ' + (type || 'info') + '"><span class="banner-body">' + (text) + '</span></div>'; }
 
   function searchBox(key, placeholder, value) {
     return '<div class="search">' +
@@ -1160,7 +1161,7 @@
   function settingRow(title, sub, right, actName, payload) {
     return li({
       title: title, sub: sub, rawTitle: true,
-      right: right,
+      right: right, rawRight: true,   // right 由内部 dot() 生成，是可信 HTML
       onClick: actName ? { name: actName, payload: payload } : null
     });
   }
@@ -1268,7 +1269,7 @@
     var dark = mode === 'dark' || (mode === 'auto' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
     document.documentElement.setAttribute('data-mode', dark ? 'dark' : 'light');
     var meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.setAttribute('content', dark ? '#171716' : '#f6f1e8');
+    if (meta) meta.setAttribute('content', dark ? '#000000' : '#f2f2f7');
     if (dark && theme !== 'night') {
       // 深浅模式 = 夜间配色
       document.documentElement.setAttribute('data-theme', 'night');
