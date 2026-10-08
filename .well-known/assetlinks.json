@@ -1,0 +1,14 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.lyt6666.mobileadmin",
+      "sha256_cert_fingerprints": [
+        "1BAFB7689A22F5C557BEF1F6F04181D4B120EA4FF0CDFC309C8B2315F38A4B1E"
+      ]
+    }
+  }
+]
