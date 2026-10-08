@@ -54,11 +54,28 @@ node tools/deploy.js --only github
 
 传完后地址是：
 
-- GitHub Pages：`https://lyt-6-666.github.io/my-blog/mobile/`
-- Gitee Pages：`https://lyt666999-luck.gitee.io/my-blog/mobile/`
-  （Gitee 免费版需要在仓库 → 服务 → Gitee Pages → 点一次「更新」）
+| 目标 | 地址 | 说明 |
+|---|---|---|
+| **GitHub Pages（主用）** | **<https://lyt-6-666.github.io/mobile-admin/>** | 独立仓库 `LYT-6-666/mobile-admin`，构建状态 `built`，最干净 |
+| GitHub Pages（备用） | <https://lyt-6-666.github.io/my-blog/mobile/> | 挂在博客仓库的 `mobile/` 子目录 |
+| Gitee Pages | <https://lyt666999-luck.gitee.io/my-blog/mobile/> | 需先到 Gitee 仓库 → 服务 → Gitee Pages 开通/点「更新」；未开通时是 404 |
 
-> 想放进别的仓库？复制 `deploy.config.json.example` 的思路，在本目录建 `deploy.config.json` 覆盖 `owner/repo/branch/dir`。该文件已被 `.gitignore` 排除。
+部署目标写在 `deploy.config.json` 里（只写「部署到哪」，**token 会自动从 `..\5-个人博客\serve_admin.js` 读取，不写进这个文件**）。
+该文件已被 `.gitignore` 排除，也不会被部署脚本上传。
+
+想只部署其中一个：
+
+```bash
+node tools/deploy.js --only github
+node tools/deploy.js --only gitee
+node tools/deploy.js --gh-repo 别的仓库名 --gh-dir sub  # 临时改目标
+```
+
+> ⚠️ 关于博客仓库的 Pages：它的 `build_type` 是 `legacy`（Jekyll），API 里构建状态经常报 `errored`，
+> 但实际发布是生效的（实测上传新文件能上线）。我在仓库根加了 `.nojekyll` 关掉 Jekyll 处理
+> —— 这个仓库是纯静态站，不需要 Jekyll。如果以后博客同步又出现「传了但页面没更新」，
+> 建议把 Pages 的 Source 从「Deploy from a branch」改成「GitHub Actions」（见 `工具` 一节末的说明）。
+> 手机端放在独立仓库就是为了不受这个问题影响。
 
 ### 第 3 步：装到手机主屏幕
 
@@ -117,6 +134,58 @@ node tools/lan-url.js 8788          # 只打印地址（脚本内部用）
 
 ---
 
+## 打包安卓 App（APK / TWA）
+
+除了"加到主屏幕"，还能打一个真正的 APK —— 用 **TWA（可信 Web 活动）** 套壳，本质是系统浏览器全屏打开同一个网页。**改网页即改 App，不用重新发版。**
+
+```bash
+cd android
+export JAVA_HOME='C:\Users\pc\.workbuddy\binaries\jdk\jdk-17.0.2'
+export PATH="/c/Users/pc/.workbuddy/binaries/jdk/jdk-17.0.2/bin:$PATH"
+./gradlew assembleRelease
+# 产物：android/app/build/outputs/apk/release/app-release.apk
+```
+
+### 三个必须知道的坑
+
+1. **路径不能含中文** —— 本项目在 `G:\网络授权系统\...` 下，AGP 默认直接拒绝构建。
+   已在 `android/gradle.properties` 里加 `android.overridePathCheck=true` 绕过（本工程纯 Java + 资源、无 NDK，安全）。
+2. **系统没装 JDK** —— 构建用的 JDK 17 在 `C:\Users\pc\.workbuddy\binaries\jdk\`，
+   所以每次构建都要显式传 `JAVA_HOME`（上面的命令已带）。换成自己装的 JDK 17+ 也行。
+3. **jcenter 已停服** —— `android/build.gradle` 的仓库换成了阿里云镜像 + mavenCentral；
+   Gradle 本身走腾讯云镜像（见 `wrapper/gradle-wrapper.properties`）。
+
+### 签名（千万别弄丢）
+
+- keystore：`android/keystore/mobile-admin.keystore`，别名 `mobile-admin`
+- 密码等信息：`android/keystore.properties`（**不入库**）+ `keystore/KEYSTORE-INFO.txt`
+- SHA-256 指纹：`1BAFB7689A22F5C557BEF1F6F04181D4B120EA4FF0CDFC309C8B2315F38A4B1E`
+- **换 keystore = 新旧 APK 不是同一个 App**，无法覆盖安装，必须卸载重装（数据会丢）
+
+### assetlinks.json：决定有没有地址栏
+
+TWA 打开时会校验 `https://<host>/.well-known/assetlinks.json` —— 注意是**域名根**，不是子路径。
+校验通过 → 全屏无地址栏；不通过 → 退回 Custom Tabs，顶部挂一条地址栏。
+
+本应用 host 是 `lyt-6-666.github.io`，但 PWA 部署在 `/mobile-admin/` 子目录下，
+所以 assetlinks.json 必须单独放**用户根仓库**：
+
+```bash
+node tools/deploy-assetlinks.js --dry   # 先看清单
+node tools/deploy-assetlinks.js         # 部署到 LYT-6-666/lyt-6-666.github.io
+```
+
+> ⚠️ `tools/deploy.js` 里的 `.well-known` 只会传到 `/mobile-admin/.well-known/`，**对 TWA 校验无效**。
+> assetlinks 一律走 `deploy-assetlinks.js`。**换 keystore 之后务必重跑一次**，否则指纹对不上。
+
+### 安装到手机
+
+```bash
+adb install -r android/dist/移动后台-v1.0.0-release.apk
+```
+
+---
+
 ## 目录结构
 
 ```
@@ -133,8 +202,16 @@ node tools/lan-url.js 8788          # 只打印地址（脚本内部用）
 │   └── pr.js               项目后台（Supabase 存储，localStorage 回退）
 ├── docs/MODULE-API.md      ★ 模块开发接口文档（想加新模块看这个）
 ├── sql/projects_table.sql  ★ 项目后台的建表 SQL（部署前请在 Supabase 跑一次）
+├── .well-known/
+│   └── assetlinks.json     ★ TWA 数字资产链接（用 deploy-assetlinks.js 部署）
+├── android/                安卓 TWA 壳工程（bubblewrap 生成，可打 APK）
+│   ├── keystore/           签名密钥（**绝对不要丢**）
+│   ├── keystore.properties 签名密码（不入库）
+│   └── dist/               打好的 APK
+├── 启动手机测试.bat         双击 = 开局域网服务器 + 复制手机地址到剪贴板
 └── tools/
-    ├── deploy.js           一键部署到 GitHub / Gitee Pages
+    ├── deploy.js           一键部署 PWA 到 GitHub / Gitee Pages
+    ├── deploy-assetlinks.js ★ 把 assetlinks.json 传到 GitHub 用户根仓库（TWA 校验）
     ├── serve.js            本地/局域网预览服务器（默认 8788，端口占用自动换）
     ├── lan-url.js          打印手机该访问的局域网地址（启动脚本用）
     ├── lint-modules.js     模块规范检查（写操作安全 / XSS / 密钥 / 事件闭环 / ES5）
