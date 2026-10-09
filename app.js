@@ -871,10 +871,25 @@
   function kv(items) {
     return items.map(function (it) {
       if (!it) return '';
-      var k = isArr(it) ? it[0] : it.k;
-      var v = isArr(it) ? it[1] : it.v;
-      var mono = isArr(it) ? false : it.mono;
-      return '<div class="kv"><div class="kv-k">' + esc(k) + '</div><div class="kv-v' + (mono ? ' mono' : '') + '">' + (isArr(it) ? esc(v === null || v === undefined || v === '' ? '-' : v) : (it.raw ? v : esc(v === null || v === undefined || v === '' ? '-' : v))) + '</div></div>';
+      // 支持两种写法：['键', 值] / {k:'键', v:值, mono, raw}
+      // 数组形式的第二项也允许传对象 {v:…, mono:…, raw:…}（此前会渲染成 [object Object]）
+      var k, v, mono = false, raw = false;
+      if (isArr(it)) {
+        k = it[0];
+        v = it[1];
+        if (isObj(v)) {
+          mono = !!v.mono;
+          raw = !!v.raw;
+          v = v.v;
+        }
+      } else {
+        k = it.k;
+        v = it.v;
+        mono = !!it.mono;
+        raw = !!it.raw;
+      }
+      var shown = (v === null || v === undefined || v === '') ? '-' : (raw ? v : esc(v));
+      return '<div class="kv"><div class="kv-k">' + esc(k) + '</div><div class="kv-v' + (mono ? ' mono' : '') + '">' + shown + '</div></div>';
     }).join('');
   }
 
