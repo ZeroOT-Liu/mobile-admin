@@ -5,7 +5,7 @@
    - 应用外壳（html/css/js/图标）：cache-first，保证断网也能打开界面
    - Supabase 等跨域请求：完全不拦截，永远走网络（数据不缓存）
    ========================================================================== */
-var VERSION = 'dsh-mobile-v9';
+var VERSION = 'dsh-mobile-v10';
 var SHELL = [
   './',
   './index.html',
