@@ -199,7 +199,8 @@ adb install -r android/dist/移动后台-v1.0.0-release.apk
 ├── modules/
 │   ├── scan.js             散线转文字 CAD 授权管理
 │   ├── xhy.js              XHY Toolbox 授权管理
-│   └── pr.js               项目后台（Supabase 存储，localStorage 回退）
+│   ├── pr.js               项目后台（Supabase 存储，localStorage 回退）
+│   └── license.js          ★ 授权码生成器（工具箱 / 在线版 / 离线版，纯本地不联网）
 ├── docs/MODULE-API.md      ★ 模块开发接口文档（想加新模块看这个）
 ├── sql/projects_table.sql  ★ 项目后台的建表 SQL（部署前请在 Supabase 跑一次）
 ├── .well-known/
@@ -209,12 +210,14 @@ adb install -r android/dist/移动后台-v1.0.0-release.apk
 │   ├── keystore.properties 签名密码（不入库）
 │   └── dist/               打好的 APK
 ├── 启动手机测试.bat         双击 = 开局域网服务器 + 复制手机地址到剪贴板
+├── license-keys.local.json 本机密钥包（**不入库、不部署**，用于在「密钥」页导入）
 └── tools/
     ├── deploy.js           一键部署 PWA 到 GitHub / Gitee Pages
     ├── deploy-assetlinks.js ★ 把 assetlinks.json 传到 GitHub 用户根仓库（TWA 校验）
     ├── serve.js            本地/局域网预览服务器（默认 8788，端口占用自动换）
     ├── lan-url.js          打印手机该访问的局域网地址（启动脚本用）
     ├── lint-modules.js     模块规范检查（写操作安全 / XSS / 密钥 / 事件闭环 / ES5）
+    ├── test-license.js     ★ 授权码算法验证（与 Node crypto / 桌面版实现交叉比对）
     ├── gen-icons.py        重新生成 PWA 图标（需要 Pillow）
     └── smoke-test.js       冒烟测试（Node 里桩化 DOM，把每个页面渲染一遍）
 ```
@@ -223,13 +226,77 @@ adb install -r android/dist/移动后台-v1.0.0-release.apk
 
 ---
 
-## 三个模块的数据来源
+## 四个模块的数据来源
 
 | 模块 | 连接名 | Supabase 项目 | 主要表 |
 |---|---|---|---|
 | 散线转文字 CAD 授权 | `cad` | `uwgqflcjuixmdhgzlvmb` | `users` `licenses` `orders` `packages` `admin_users` `verification_codes` `login_logs` `verify_logs` `email_logs` `admin_operation_logs` |
 | XHY Toolbox 授权 | `xhy` | `ofdouqimwsplrhjcfdbv` | 见 `modules/xhy.js` 顶部注释 |
 | 项目后台 | `prj` | 默认同 `cad`，可改 | `projects`（需自己建表） |
+| **授权码生成** | **不联网** | — | —（纯本机计算，记录只存浏览器 localStorage） |
+
+---
+
+## 🔑 授权码生成（独立模块）
+
+把桌面上的三套授权码生成器搬进了手机，**完全不联网**，出门也能给客户发码：
+
+| 生成器 | 机器码 | 算法 | 对应产品 |
+|---|---|---|---|
+| 🧰 工具箱 | `BJXL-` 开头 | HMAC-SHA256 | 不加班的小刘_工具箱 |
+| 📝 在线版 | `SXZWZ-` 开头 | HMAC-SHA256 | 散线转文字（在线） |
+| 💻 离线版 | 8 组 4 位十六进制 | AES-256-CBC + PBKDF2 | CAD散线转文字（离线），授权码以 `-LYT` 结尾 |
+
+算法来源与对齐关系：
+
+- **离线版**：`CAD散线转文字_后端/LicenseCore.cs` 的 `SecurityConfig` / `CryptoHelper` / `LicenseGenerator`
+- **工具箱 / 在线版**：`4-三端授权/统一授权管理.html`
+
+两条实现路径：优先用浏览器原生 WebCrypto（快，约 14ms）；局域网 `http://` 属于非安全上下文、
+`crypto.subtle` 不存在时，自动退化到内置的纯 JS 实现（约 300ms）。**两条路径输出逐字节相同**。
+
+### 🔐 签发密钥不进代码：在「密钥」页手动录入一次
+
+`modules/license.js` 里**没有任何密钥**。三套签发密钥（工具箱的 secret salt、在线版的 secret salt、
+离线版的 `baseKey` / `baseSalt` / `pepper` / `secretKey`）都由你自己录入，存在手机浏览器的
+localStorage（key：`license.keys`），像数据源代码那样，**永远不写进代码、不进部署包**。
+
+首次使用流程：
+
+1. 打开「🔑 授权码」→ 顶部切到任一生成器 → 页面会显示「还没配置 … 的签发密钥」+ **去配置密钥**
+2. 进「密钥」页，把四/六个值粘进去 → **保存**（页面会逐个显示"已配置"）
+3. 回到生成页，表单出现，正常签发
+
+密钥值就是桌面版工具里的那几项，可以从 `4-三端授权/统一授权管理.html` 或
+`CAD散线转文字_后端/LicenseCore.cs` 的 `SecurityConfig` 里对照抄过来（**不要**把它们写回本仓库）。
+
+**换手机 / 清浏览器数据后要重新录一次。** 为了省事，本机有一份现成的密钥包：
+
+- `license-keys.local.json`（仓库根目录，已在 `.gitignore` 里，**不会**被部署）
+- 它和「密钥」页 **导出/导入** 功能用的格式完全相同：`{ "app": "mobile-admin", "keys": {…} }`
+- 迁移方式：打开该文件 → 全选复制 → 手机「密钥」页底部 **粘贴密钥包** 框 → **📥 导入**
+
+> 为什么不做"内置密钥 + 局域网专用"的折中：站点是公开的，内置密钥等于公开密钥，
+> 任何人都能伪造授权码。手动录一次的成本远低于密钥泄露的代价。
+
+改了算法参数（密钥、盐、迭代次数、天数）任何一项，客户端就验不过了 —— 改完必须跑：
+
+```bash
+node tools/test-license.js   # 77 项：原语 vs Node crypto、与桌面版比对、离线码反向解密
+```
+
+更硬的验证（双向交叉验签，用真实 C# 工程跑）：把 `LicenseCore.cs` 复制一份、把 `HardwareInfo`
+换成固定值、用 `dotnet run` 跑 —— JS 生成的码 C# 要能验过，C# 生成的码 JS 要能解回去。
+
+改完还要跑一遍整体回归（这三条一条别省）：
+
+```bash
+node tools/lint-modules.js   # 模块规范：写操作安全 / XSS / 密钥 / 事件闭环 / ES5
+node tools/smoke-test.js     # 102 项：桩化 DOM 把每个页面渲染一遍
+```
+
+最后在真浏览器里点一遍（Playwright，需本地起 `tools/serve.js`）：三个生成器各签一次码、
+和 Node 期望值逐字节比对，记录页 / 详情弹层 / 密钥页导入 / 底部 Tab 全覆盖 —— 共 13 项。
 
 ---
 
@@ -265,7 +332,8 @@ adb install -r android/dist/移动后台-v1.0.0-release.apk
 
 ## 安全说明（请一定读）
 
-1. **代码里没有任何密钥。** 三个数据源的 URL 是可公开的（预填在 `app.js` 的 `CONN_DEF`），API Key 必须你自己输入，只存在手机浏览器的 localStorage。
+1. **数据源代码里没有任何密钥。** 三个数据源的 URL 是可公开的（预填在 `app.js` 的 `CONN_DEF`），API Key 必须你自己输入，只存在手机浏览器的 localStorage。
+   **授权码模块的签发密钥同理**：`modules/license.js` 里一个密钥常量都没有，全部由你在「密钥」页录入一次、存本机（见「🔑 授权码生成」一节）。所以这个仓库和部署包可以放心公开。
 2. **`service_role` key 等于数据库管理员。** 因为这个应用是"管理后台"，必须用它才能增删改。建议：
    - 只在自己的手机上输入，不要在公共电脑上保存
    - 给手机设锁屏密码；应用内还可以再开一层 **设置 → 安全 → 应用密码(PIN)**
