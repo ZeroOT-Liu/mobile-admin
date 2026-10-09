@@ -17,6 +17,7 @@
      licenses              授权（授权码 / 绑定机器码 / 剩余天数 / 离线次数）
      orders                订单
      packages              套餐
+     versions              版本更新（等价桌面版 3_管理后台「版本管理」）
      admin_users           管理员
      verification_codes    验证码
      login_logs            登录日志
@@ -113,6 +114,19 @@
   var PWD_SALT = 'CrayfishSalt2024';
 
   var PWD_TIP = '<div class="help">密码以 SHA256(密码 + ' + PWD_SALT + ') 存储，与桌面版后台一致。</div>';
+
+  /* 版本更新（对应桌面版 3_管理后台「版本管理」页，同一张 versions 表）
+     列：id / version / title / changelog / download_url / force_update /
+         published / created_at / updated_at
+     客户端启动/使用时会取 published=true 里版本号最大的那条提示更新，所以：
+       · version 必须是数字点分格式（1.7.0），否则客户端比不出大小
+       · published=false 的「草稿」客户端看不到
+     download_url 实测可能是 QQ 群号之类的说明文字而不是链接，
+     因此详情页当纯文本展示 + 复制，只有形如 http(s):// 时才给「打开」按钮。 */
+  var VER_KEY = 'scan.versions';
+  var VER_TIP = '<div class="banner info"><span class="banner-body">' +
+    '客户端会读<b>已发布</b>里版本号最大的那条提示更新。版本号请用数字点分格式（如 <b>1.7.0</b>），' +
+    '「草稿」状态客户端看不到。</span></div>';
 
   /* ---- 模块内部局部状态（不污染全局） ---- */
   var packagesCache = {};     // package_type -> 套餐行
@@ -355,7 +369,7 @@
      4. 分页 / 搜索绑定（key 前缀统一 scan.）
      ====================================================================== */
 
-  var LIST_KEYS = ['scan.users', 'scan.licenses', 'scan.orders', 'scan.packages',
+  var LIST_KEYS = ['scan.users', 'scan.licenses', 'scan.orders', 'scan.packages', 'scan.versions',
     'scan.devices', 'scan.blacklist', 'scan.recycle', 'scan.logs', 'scan.admins', 'scan.tools'];
 
   function resetPager(key, keepSearch) {
@@ -2211,7 +2225,319 @@
   }
 
   /* ======================================================================
-     20. 页面渲染分派
+     20. 页面：版本更新（等价桌面版 3_管理后台「版本管理」）
+     ====================================================================== */
+
+  /** 版本号比较：数字点分。>0 表示 a 比 b 新（与桌面版 cmpVersion 一致） */
+  function cmpVersion(a, b) {
+    var pa = String(a === null || a === undefined ? '' : a).replace(/[^0-9.]/g, '').split('.').map(Number);
+    var pb = String(b === null || b === undefined ? '' : b).replace(/[^0-9.]/g, '').split('.').map(Number);
+    var n = Math.max(pa.length, pb.length);
+    for (var i = 0; i < n; i++) {
+      var x = pa[i] || 0;
+      var y = pb[i] || 0;
+      if (x !== y) return x - y;
+    }
+    return 0;
+  }
+
+  /** 版本号是否是「数字点分」格式（客户端靠它比大小） */
+  function verLikeNumber(v) { return /^\d+(\.\d+){0,3}$/.test(String(v || '').trim()); }
+
+  function isHttpUrl(s) { return /^https?:\/\//i.test(String(s || '').trim()); }
+
+  /** changelog 里的有效条目数（按行，忽略空行） */
+  function verLineCount(changelog) {
+    var s = String(changelog || '').trim();
+    if (!s) return 0;
+    return s.split(/\r?\n/).filter(function (l) { return l.trim() !== ''; }).length;
+  }
+
+  function verLabel(v) { return 'v' + ((v && v.version) || '-'); }
+
+  /** 从一批已发布版本里挑出版本号最大的那条 */
+  function verLatest(list) {
+    var best = null;
+    (list || []).forEach(function (v) {
+      if (!v) return;
+      if (!best || cmpVersion(v.version, best.version) > 0) best = v;
+    });
+    return best;
+  }
+
+  function versionLi(v) {
+    var n = verLineCount(v.changelog);
+    var sub = DS.fmtTime(v.created_at) +
+      (n ? ' · ' + n + ' 项更新' : '') +
+      (v.title ? ' · ' + v.title : '');
+    var badge = DS.dot(v.published ? '已发布' : '草稿', v.published ? 'ok' : 'warn');
+    if (v.force_update) badge += ' ' + DS.chip('强制更新', 'err', true);
+    return DS.li({
+      ic: '🚀',
+      title: verLabel(v),
+      sub: sub,
+      badge: badge,
+      onClick: { name: 'scan:verDetail', payload: { id: v.id } }
+    });
+  }
+
+  /** 顶部概览：最新发布版 + 统计 */
+  function verOverviewCard(pubList, total) {
+    var latest = verLatest(pubList);
+    var head =
+      '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:10px">' +
+      '<span style="font-size:15px;font-weight:600">最新发布版：' +
+      (latest ? DS.esc(verLabel(latest)) : '<span class="muted">暂无已发布版本</span>') + '</span>' +
+      (latest ? DS.dot(latest.force_update ? '强制更新' : '普通更新', latest.force_update ? 'err' : 'muted') : '') +
+      '</div>' +
+      '<div class="muted tiny" style="line-height:1.7">' +
+      (latest
+        ? '客户端会提示用户更新到 ' + DS.esc(verLabel(latest)) + '。'
+        : '还没有「已发布」的版本，客户端不会收到任何更新提示。') +
+      '</div>';
+
+    var stats = DS.statGrid([
+      { icon: '🚀', label: '版本总数', value: String(total) },
+      { icon: '📣', label: '已发布', value: String((pubList || []).length) },
+      { icon: '✏️', label: '当前最新', value: latest ? verLabel(latest) : '—' }
+    ]);
+
+    return DS.card(stats + gap(12) + head, { title: '📊 版本概览' });
+  }
+
+  function renderVersions(el) {
+    el.innerHTML = DS.loading('加载版本…');
+    var st = DS.pager(VER_KEY);
+    var offset = st.page * st.size;
+    var kw = orKw(st.search);
+    var opts = {
+      select: '*', order: 'created_at', ascending: false,
+      rangeFrom: offset, rangeTo: offset + st.size - 1
+    };
+    if (kw) opts.orFilter = ilikeOr(['version', 'title', 'changelog', 'download_url'], kw);
+
+    // 列表 + 已发布全集（算最新版）一起取
+    Promise.all([
+      DS.api(CONN, 'versions', opts),
+      DS.api(CONN, 'versions', {
+        select: 'id,version,title,force_update,created_at',
+        filters: { published: true }, order: 'created_at', ascending: false, limit: 200
+      })
+    ]).then(function (rs) {
+      var res = rs[0];
+      if (res.error) { el.innerHTML = errBoxOf(res); return; }
+      var rows = res.data || [];
+      var total = DS.totalOf(res);
+      var pub = (rs[1] && !rs[1].error && rs[1].data) || [];
+
+      var html = toolbar(VER_KEY, '搜索版本号 / 标题 / 更新内容', st.search, [
+        { text: '➕ 发布新版本', cls: 'btn-primary', onClick: { name: 'scan:verAdd' } },
+        { text: '🔄 刷新', cls: 'btn-outline', onClick: { name: 'scan:verRefresh' } }
+      ]);
+      html += VER_TIP;
+      html += verOverviewCard(pub, total);
+      html += gap(10);
+      html += DS.card(
+        rows.length
+          ? DS.list(rows.map(versionLi))
+          : DS.empty(kw ? '没有匹配的版本' : '暂无版本，点「发布新版本」添加', '🚀'),
+        { tight: true, title: '版本列表', right: '<span class="muted tiny">共 ' + DS.esc(total) + ' 个</span>' }
+      );
+      html += DS.pagerHtml(VER_KEY, total, st.size);
+      el.innerHTML = html;
+    });
+  }
+
+  function openVersionDetail(id) {
+    detailSheet('版本详情', function (body) {
+      DS.api(CONN, 'versions', { select: '*', filters: { id: id }, limit: 1 }).then(function (res) {
+        if (res.error) { body.innerHTML = errBoxOf(res); return; }
+        var v = (res.data || [])[0];
+        if (!v) { body.innerHTML = DS.empty('版本不存在或已被删除', '🚀'); return; }
+
+        var n = verLineCount(v.changelog);
+        var tags = DS.dot(v.published ? '已发布' : '草稿', v.published ? 'ok' : 'warn');
+        if (v.force_update) tags += DS.chip('强制更新', 'err', true);
+        if (!verLikeNumber(v.version)) tags += DS.chip('版本号非点分格式', 'warn', true);
+
+        var html =
+          '<div class="detail-head"><div class="detail-title">' + DS.esc(verLabel(v)) + '</div>' +
+          (v.title ? '<div class="muted" style="margin-top:4px;font-size:13px">' + DS.esc(v.title) + '</div>' : '') +
+          '<div class="detail-tags">' + tags + '</div></div>' +
+          kvList([
+            ['版本 ID', { v: v.id, mono: true }],
+            ['版本号', verLabel(v)],
+            ['标题', v.title || '-'],
+            ['发布状态', v.published ? '已发布（客户端可见）' : '草稿（客户端不可见）'],
+            ['强制更新', v.force_update ? '是' : '否'],
+            ['更新条目', n ? n + ' 项' : '-'],
+            ['发布时间', DS.fmtTime(v.created_at)],
+            ['更新时间', v.updated_at ? DS.fmtTime(v.updated_at) : '-']
+          ]) + gap(14);
+
+        // 获取方式 / 下载地址
+        html += '<div class="section-h">获取方式</div>';
+        if (v.download_url) {
+          html += '<div class="log-block">' + DS.esc(v.download_url) + '</div>';
+        } else {
+          html += '<div class="muted tiny">未填写获取方式 / 下载地址</div>';
+        }
+
+        // 更新内容
+        html += '<div class="section-h" style="margin-top:14px">更新内容</div>';
+        html += v.changelog
+          ? '<div class="log-block">' + DS.esc(v.changelog) + '</div>'
+          : '<div class="muted tiny">未填写更新内容</div>';
+
+        html += gap(14) + DS.actions(
+          (v.download_url
+            ? [{ text: '📋 复制获取方式', cls: 'btn-outline', onClick: { name: 'scan:verCopy', payload: { text: v.download_url } } }]
+            : []
+          ).concat(
+            (isHttpUrl(v.download_url)
+              ? [{ text: '🔗 打开链接', cls: 'btn-outline', onClick: { name: 'scan:verOpen', payload: { url: v.download_url } } }]
+              : []
+            )
+          ).concat([
+            { text: '编辑', cls: 'btn-primary', onClick: { name: 'scan:verEdit', payload: { id: v.id } } },
+            v.published
+              ? { text: '下线（转草稿）', cls: 'btn-outline', onClick: { name: 'scan:verPublish', payload: { id: v.id, published: false, version: v.version } } }
+              : { text: '发布', cls: 'btn-success', onClick: { name: 'scan:verPublish', payload: { id: v.id, published: true, version: v.version } } },
+            { text: '删除', cls: 'btn-danger', onClick: { name: 'scan:verDel', payload: { id: v.id, version: v.version } } }
+          ])
+        );
+
+        body.innerHTML = html;
+      });
+    });
+  }
+
+  function openVersionForm(v) {
+    var isNew = !v;
+    formSheet({
+      title: isNew ? '发布新版本' : ('编辑版本 ' + verLabel(v)),
+      okText: isNew ? '发布' : '保存',
+      html:
+        DS.input({
+          name: 'version', label: '版本号', required: true, mono: true,
+          value: isNew ? '' : (v.version || ''),
+          placeholder: '如 1.7.0',
+          help: '数字点分格式，客户端靠它比较大小；不要写 v 前缀'
+        }) +
+        DS.input({
+          name: 'title', label: '版本标题（可选）',
+          value: isNew ? '' : (v.title || ''),
+          placeholder: '如 浩辰适配版'
+        }) +
+        DS.textarea({
+          name: 'changelog', label: '更新内容', rows: 8,
+          value: isNew ? '' : (v.changelog || ''),
+          placeholder: '一行一条，例如：\n1. 修复授权系统速度优化体验；\n2. 增加浩辰版本 2022-2023 适配；\n3. 修复垂直角度识别问题；'
+        }) +
+        DS.textarea({
+          name: 'download_url', label: '获取方式 / 下载地址', rows: 3,
+          value: isNew ? '' : (v.download_url || ''),
+          placeholder: 'http(s) 链接，或 QQ 群号等说明文字'
+        }) +
+        DS.toggle({
+          name: 'force_update', label: '强制更新',
+          sub: '开启后客户端不允许跳过本次更新',
+          checked: isNew ? false : !!v.force_update
+        }) +
+        DS.toggle({
+          name: 'published', label: '立即发布',
+          sub: '关闭则存为草稿，客户端看不到',
+          checked: isNew ? true : !!v.published
+        }),
+      onSubmit: function (body) {
+        var d = DS.formData(body);
+        var version = String(d.version === undefined || d.version === null ? '' : d.version).trim().replace(/^v/i, '');
+        if (!version) { DS.toast('请填写版本号', 'err'); return false; }
+        if (version.length > 32) { DS.toast('版本号太长了（最多 32 字符）', 'err'); return false; }
+
+        var save = function () {
+          var data = {
+            version: version,
+            title: String(d.title === undefined || d.title === null ? '' : d.title).trim() || null,
+            changelog: String(d.changelog === undefined || d.changelog === null ? '' : d.changelog).trim() || null,
+            download_url: String(d.download_url === undefined || d.download_url === null ? '' : d.download_url).trim() || null,
+            force_update: !!d.force_update,
+            published: !!d.published
+          };
+          if (isNew) {
+            data.created_at = nowISO();
+            data.updated_at = nowISO();
+            return DS.api(CONN, 'versions', { method: 'POST', data: data }).then(function (res) {
+              if (res.error) { DS.toast('发布失败：' + res.error.message, 'err'); return false; }
+              var newId = (res.data && res.data[0] && res.data[0].id) || null;
+              logAdmin('create', 'versions', newId, '发布版本 ' + version, data);
+              DS.toast('版本 ' + version + ' 已发布', 'ok');
+              DS.refresh();
+            });
+          }
+          data.updated_at = nowISO();
+          return safePatch('versions', v.id, data).then(function (res) {
+            if (res.error) { DS.toast('保存失败：' + res.error.message, 'err'); return false; }
+            logAdmin('update', 'versions', v.id, '编辑版本 ' + version, data);
+            DS.toast('版本 ' + version + ' 已更新', 'ok');
+            DS.refresh();
+          });
+        };
+
+        // 版本号不是数字点分时给一次提醒（不硬拦，兼容 beta 之类写法）
+        if (!verLikeNumber(version)) {
+          return DS.confirm({
+            title: '版本号格式提醒',
+            msg: '「' + version + '」不是数字点分格式（如 1.5.2）。客户端比较版本号时只会取数字部分，' +
+              '可能导致更新提示不准确。仍要保存吗？',
+            okText: '仍要保存'
+          }).then(function (ok) { return ok ? save() : false; });
+        }
+        return save();
+      }
+    });
+  }
+
+  function setVersionPublished(id, published, version) {
+    DS.confirm({
+      title: published ? '发布版本' : '转为草稿',
+      msg: published
+        ? '确认发布【v' + (version || id) + '】？发布后所有客户端会收到更新提示。'
+        : '确认把【v' + (version || id) + '】转为草稿？客户端将不再看到这个版本。',
+      okText: published ? '确认发布' : '转为草稿'
+    }).then(function (ok) {
+      if (!ok) return;
+      safePatch('versions', id, { published: !!published, updated_at: nowISO() }).then(function (res) {
+        if (res.error) { DS.toast('操作失败：' + res.error.message, 'err'); return; }
+        logAdmin(published ? 'publish' : 'unpublish', 'versions', id,
+          (published ? '发布版本 ' : '版本转草稿 ') + (version || id), { published: !!published });
+        DS.toast(published ? '版本已发布' : '已转为草稿', 'ok');
+        DS.closeAllOverlays();
+        DS.refresh();
+      });
+    });
+  }
+
+  function deleteVersion(id, version) {
+    DS.confirm({
+      title: '删除版本',
+      msg: '确认删除【v' + (version || id) + '】？删除后无法恢复，客户端也不会再看到它。',
+      okText: '确认删除',
+      danger: true
+    }).then(function (ok) {
+      if (!ok) return;
+      DS.api(CONN, 'versions', { method: 'DELETE', filters: { id: id } }).then(function (res) {
+        if (res.error) { DS.toast('删除失败：' + res.error.message, 'err'); return; }
+        logAdmin('delete', 'versions', id, '删除版本 ' + (version || id), {});
+        DS.toast('版本已删除', 'ok');
+        DS.closeAllOverlays();
+        DS.refresh();
+      });
+    });
+  }
+
+  /* ======================================================================
+     21. 页面渲染分派
      ====================================================================== */
 
   function render(pageId, el) {
@@ -2220,6 +2546,7 @@
     if (pageId === 'licenses') return renderLicenses(el);
     if (pageId === 'orders') return renderOrders(el);
     if (pageId === 'packages') return renderPackages(el);
+    if (pageId === 'versions') return renderVersions(el);
     if (pageId === 'devices') return renderDevices(el);
     if (pageId === 'blacklist') return renderBlacklist(el);
     if (pageId === 'recycleBin') return renderRecycleBin(el);
@@ -2230,7 +2557,7 @@
   }
 
   /* ======================================================================
-     21. 事件委托（禁止把 id 拼进 onclick 字符串）
+     22. 事件委托（禁止把 id 拼进 onclick 字符串）
      ====================================================================== */
 
   /* ---- 通用 ---- */
@@ -2304,6 +2631,27 @@
   });
   DS.on('scan:pkgToggle', function (p) { if (p && p.id) togglePackage(p.id, !!p.active, p.name); });
 
+  /* ---- 版本更新 ---- */
+  DS.on('scan:verAdd', function () { openVersionForm(null); });
+  DS.on('scan:verEdit', function (p) {
+    if (!p || !p.id) return;
+    DS.api(CONN, 'versions', { select: '*', filters: { id: p.id }, limit: 1 }).then(function (res) {
+      if (res.error) { DS.toast('读取失败：' + res.error.message, 'err'); return; }
+      var row = (res.data || [])[0];
+      if (!row) { DS.toast('版本不存在或已被删除', 'err'); return; }
+      openVersionForm(row);
+    });
+  });
+  DS.on('scan:verDetail', function (p) { if (p && p.id) openVersionDetail(p.id); });
+  DS.on('scan:verPublish', function (p) { if (p && p.id) setVersionPublished(p.id, !!p.published, p.version); });
+  DS.on('scan:verDel', function (p) { if (p && p.id) deleteVersion(p.id, p.version); });
+  DS.on('scan:verRefresh', function () { DS.refresh(); });
+  DS.on('scan:verCopy', function (p) { DS.copy(p && p.text ? p.text : ''); });
+  DS.on('scan:verOpen', function (p) {
+    if (!p || !isHttpUrl(p.url)) { DS.toast('不是可打开的链接', 'err'); return; }
+    window.open(p.url, '_blank', 'noopener');
+  });
+
   /* ---- 黑名单 ---- */
   DS.on('scan:blTab', function (v) {
     blacklistTab = v === 'machine' ? 'machine' : 'email';
@@ -2356,7 +2704,7 @@
   DS.on('scan:adminReset', function (p) { if (p && p.id) resetAdminPwd(p.id, p.username); });
 
   /* ======================================================================
-     22. 注册模块
+     23. 注册模块
      ====================================================================== */
 
   DS.registerModule({
@@ -2364,7 +2712,7 @@
     name: '散线转文字 CAD 授权',
     tabName: 'CAD',
     icon: '📡',
-    subtitle: '用户 · 授权 · 订单 · 套餐',
+    subtitle: '用户 · 授权 · 订单 · 套餐 · 版本',
     conns: ['cad'],
     pages: [
       { id: 'dashboard', title: '仪表盘' },
@@ -2373,6 +2721,7 @@
       { id: 'licenses', title: '授权管理' },
       { id: 'orders', title: '订单管理' },
       { id: 'packages', title: '套餐管理' },
+      { id: 'versions', title: '版本更新' },
       { id: 'devices', title: '活跃设备' },
       { id: 'blacklist', title: '黑名单' },
       { id: 'recycleBin', title: '回收站' },
