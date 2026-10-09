@@ -218,6 +218,11 @@ adb install -r android/dist/移动后台-v1.0.0-release.apk
     ├── lan-url.js          打印手机该访问的局域网地址（启动脚本用）
     ├── lint-modules.js     模块规范检查（写操作安全 / XSS / 密钥 / 事件闭环 / ES5）
     ├── test-license.js     ★ 授权码算法验证（与 Node crypto / 桌面版实现交叉比对）
+    ├── verify-browser.js   ★ 授权码浏览器实测（Playwright，本地站点，13 项）
+    ├── verify-live.js      ★ 授权码线上实测（对 GitHub Pages 真跑一遍签发，7 项）
+    ├── verify-versions.js  ★ 版本更新页真数据实测（Playwright + 真实 Supabase，28 项；
+    │                          写入用草稿 + 低版本号，测完自动删除，密钥运行时从
+    │                          ../3_管理后台/config.json 读取、不写进本仓库）
     ├── gen-icons.py        重新生成 PWA 图标（需要 Pillow）
     └── smoke-test.js       冒烟测试（Node 里桩化 DOM，把每个页面渲染一遍）
 ```
@@ -230,7 +235,7 @@ adb install -r android/dist/移动后台-v1.0.0-release.apk
 
 | 模块 | 连接名 | Supabase 项目 | 主要表 |
 |---|---|---|---|
-| 散线转文字 CAD 授权 | `cad` | `uwgqflcjuixmdhgzlvmb` | `users` `licenses` `orders` `packages` `admin_users` `verification_codes` `login_logs` `verify_logs` `email_logs` `admin_operation_logs` |
+| 散线转文字 CAD 授权 | `cad` | `uwgqflcjuixmdhgzlvmb` | `users` `licenses` `orders` `packages` `versions` `admin_users` `verification_codes` `login_logs` `verify_logs` `email_logs` `admin_operation_logs` |
 | XHY Toolbox 授权 | `xhy` | `ofdouqimwsplrhjcfdbv` | 见 `modules/xhy.js` 顶部注释 |
 | 项目后台 | `prj` | 默认同 `cad`，可改 | `projects`（需自己建表） |
 | **授权码生成** | **不联网** | — | —（纯本机计算，记录只存浏览器 localStorage） |
@@ -297,6 +302,33 @@ node tools/smoke-test.js     # 102 项：桩化 DOM 把每个页面渲染一遍
 
 最后在真浏览器里点一遍（Playwright，需本地起 `tools/serve.js`）：三个生成器各签一次码、
 和 Node 期望值逐字节比对，记录页 / 详情弹层 / 密钥页导入 / 底部 Tab 全覆盖 —— 共 13 项。
+
+---
+
+## 🚀 版本更新（CAD 模块新增页）
+
+「📡 CAD」板块新增 **版本更新** 页，等价桌面版 `3_管理后台/admin.html` 的「版本管理」，
+读写同一张 `versions` 表（`uwgqflcjuixmdhgzlvmb`），手机上就能发版：
+
+| 能力 | 说明 |
+|---|---|
+| 版本概览 | 最新发布版 / 已发布数 / 版本总数，一眼看清客户端会更新到哪 |
+| 发布新版本 | 版本号（必填）、标题、更新内容（多行）、获取方式、强制更新、立即发布 |
+| 草稿 | `published=false` 客户端看不到，可以先把更新内容写好 |
+| 一键下线 | 已发布 → 草稿，客户端立刻收不到该版本提示 |
+| 搜索 | 版本号 / 标题 / 更新内容 / 获取方式 |
+
+和桌面版的两点差异：
+
+1. **多了 `title` 和 `force_update` 两个字段**（表里本来就有，桌面版 UI 没暴露）
+2. `download_url` 实测可能是 QQ 群号之类的说明文字而不是链接，所以详情页把它当
+   **纯文本 + 复制** 处理，只有形如 `http(s)://` 时才给「打开链接」按钮
+
+> 版本号务必用数字点分格式（`1.7.0`），客户端比较版本只取数字部分；
+> 非 point 分格式保存时会弹一次提醒（不硬拦，兼容 `1.8.0-beta` 之类写法）。
+
+真数据实测：`node tools/verify-versions.js`（28 项，写入用**草稿 + 低版本号**、
+测完自动删除，不会污染线上数据）。
 
 ---
 
