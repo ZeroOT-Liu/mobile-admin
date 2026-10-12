@@ -56,8 +56,8 @@ node tools/deploy.js --only github
 
 | 目标 | 地址 | 说明 |
 |---|---|---|
-| **GitHub Pages（主用）** | **<https://lyt-6-666.github.io/mobile-admin/>** | 独立仓库 `LYT-6-666/mobile-admin`，构建状态 `built`，最干净 |
-| GitHub Pages（备用） | <https://lyt-6-666.github.io/my-blog/mobile/> | 挂在博客仓库的 `mobile/` 子目录 |
+| **GitHub Pages（主用）** | **<https://zeroot-liu.github.io/mobile-admin/>** | 独立仓库 `ZeroOT-Liu/mobile-admin`，构建状态 `built`，最干净 |
+| GitHub Pages（备用） | <https://zeroot-liu.github.io/my-blog/mobile/> | 挂在博客仓库的 `mobile/` 子目录 |
 | Gitee Pages | <https://lyt666999-luck.gitee.io/my-blog/mobile/> | 需先到 Gitee 仓库 → 服务 → Gitee Pages 开通/点「更新」；未开通时是 404 |
 
 部署目标写在 `deploy.config.json` 里（只写「部署到哪」，**token 会自动从 `..\5-个人博客\serve_admin.js` 读取，不写进这个文件**）。
@@ -167,12 +167,12 @@ export PATH="/c/Users/pc/.workbuddy/binaries/jdk/jdk-17.0.2/bin:$PATH"
 TWA 打开时会校验 `https://<host>/.well-known/assetlinks.json` —— 注意是**域名根**，不是子路径。
 校验通过 → 全屏无地址栏；不通过 → 退回 Custom Tabs，顶部挂一条地址栏。
 
-本应用 host 是 `lyt-6-666.github.io`，但 PWA 部署在 `/mobile-admin/` 子目录下，
+本应用 host 是 `zeroot-liu.github.io`，但 PWA 部署在 `/mobile-admin/` 子目录下，
 所以 assetlinks.json 必须单独放**用户根仓库**：
 
 ```bash
 node tools/deploy-assetlinks.js --dry   # 先看清单
-node tools/deploy-assetlinks.js         # 部署到 LYT-6-666/lyt-6-666.github.io
+node tools/deploy-assetlinks.js         # 部署到 ZeroOT-Liu/zeroot-liu.github.io
 ```
 
 > ⚠️ `tools/deploy.js` 里的 `.well-known` 只会传到 `/mobile-admin/.well-known/`，**对 TWA 校验无效**。
@@ -254,8 +254,11 @@ adb install -r android/dist/移动后台-v1.0.0-release.apk
 
 算法来源与对齐关系：
 
-- **离线版**：`CAD散线转文字_后端/LicenseCore.cs` 的 `SecurityConfig` / `CryptoHelper` / `LicenseGenerator`
-- **工具箱 / 在线版**：`4-三端授权/统一授权管理.html`
+- **离线版**：`G:\LYT-开发\CAD二次开发\LYT-软件开发\C#\授权系统\开发版\LicenseCore.cs`
+  （`SecurityConfig` 派生密钥 / `CryptoHelper` 负责 AES 与哈希 / `LicenseGenerator` 组装格式；
+  客户端校验入口是同一文件的 `LicenseManager.ValidateLicense`）
+- **工具箱 / 在线版**：`D:\不加班的小刘\C#开发\不加班的小刘_工具箱\不加班的小刘_工具箱授权\MainWindow.xaml.cs`
+  （`GenerateLicenseKey`，权威生成器）
 
 两条实现路径：优先用浏览器原生 WebCrypto（快，约 14ms）；局域网 `http://` 属于非安全上下文、
 `crypto.subtle` 不存在时，自动退化到内置的纯 JS 实现（约 300ms）。**两条路径输出逐字节相同**。
@@ -272,8 +275,18 @@ localStorage（key：`license.keys`），像数据源代码那样，**永远不�
 2. 进「密钥」页，把四/六个值粘进去 → **保存**（页面会逐个显示"已配置"）
 3. 回到生成页，表单出现，正常签发
 
-密钥值就是桌面版工具里的那几项，可以从 `4-三端授权/统一授权管理.html` 或
-`CAD散线转文字_后端/LicenseCore.cs` 的 `SecurityConfig` 里对照抄过来（**不要**把它们写回本仓库）。
+密钥值就是桌面端工具里的那几项，可以从 `4-三端授权/统一授权管理.html` 或
+`G:\LYT-开发\…\授权系统\开发版\LicenseCore.cs` 的 `SecurityConfig` 里对照抄过来（**不要**把它们写回本仓库）。
+
+离线版那四项是**定长十六进制**，少抄一位就会生成"结构完全正常、客户端却提示验证失败"的废码，
+保存时页面会校验并直接拦住：
+
+| 项 | C# 字节数 | 十六进制位数 |
+|---|---|---|
+| `baseKey` | 32 | 64 |
+| `baseSalt` | 50 | 100 |
+| `pepper` | 40 | 80 |
+| `secretKey` | 55 | 110 |
 
 **换手机 / 清浏览器数据后要重新录一次。** 为了省事，本机有一份现成的密钥包：
 
@@ -287,17 +300,19 @@ localStorage（key：`license.keys`），像数据源代码那样，**永远不�
 改了算法参数（密钥、盐、迭代次数、天数）任何一项，客户端就验不过了 —— 改完必须跑：
 
 ```bash
-node tools/test-license.js   # 77 项：原语 vs Node crypto、与桌面版比对、离线码反向解密
+node tools/test-license.js   # 88 项：原语 vs Node crypto、与桌面版比对、离线码反向解密
 ```
 
-更硬的验证（双向交叉验签，用真实 C# 工程跑）：把 `LicenseCore.cs` 复制一份、把 `HardwareInfo`
-换成固定值、用 `dotnet run` 跑 —— JS 生成的码 C# 要能验过，C# 生成的码 JS 要能解回去。
+其中**两套客户端校验流程是照抄 C# 源码实现的**（工具箱/在线版 `clientValidateHmac`、
+离线版 `clientValidateLyt`），而且断言用的是**客户端自己的常量**、不是本机密钥包 ——
+所以连"密钥包填错、客户端没跟着改"这种「自洽但客户端验不过」的情况也能测出来。
+这两项绿了，客户端能激活就没有悬念。
 
 改完还要跑一遍整体回归（这三条一条别省）：
 
 ```bash
 node tools/lint-modules.js   # 模块规范：写操作安全 / XSS / 密钥 / 事件闭环 / ES5
-node tools/smoke-test.js     # 102 项：桩化 DOM 把每个页面渲染一遍
+node tools/smoke-test.js     # 104 项：桩化 DOM 把每个页面渲染一遍
 ```
 
 最后在真浏览器里点一遍（Playwright，需本地起 `tools/serve.js`）：三个生成器各签一次码、
