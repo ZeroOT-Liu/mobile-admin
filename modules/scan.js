@@ -173,6 +173,15 @@
   /** 纯文字截断（不入 HTML 时可不用 DS.esc） */
   function short(s, n) { return DS.short(s, n); }
 
+  /** 订单号：等价桌面端 admin.html:2726 的 ORD + 年月日时分秒 + 2位随机 */
+  function genOrderNo() {
+    var now = new Date();
+    function p2(n) { return String(n).length < 2 ? '0' + n : String(n); }
+    var ts = now.getFullYear() + p2(now.getMonth() + 1) + p2(now.getDate()) +
+      p2(now.getHours()) + p2(now.getMinutes()) + p2(now.getSeconds());
+    return 'ORD' + ts + p2(Math.floor(Math.random() * 100));
+  }
+
   /** 状态徽标：等价桌面版 scanStatusChip() */
   function statusChip(status, category) {
     var m = STATUS_MAP[category];
@@ -465,6 +474,110 @@
   }
 
   function gap(h) { return '<div style="height:' + (h || 10) + 'px"></div>'; }
+
+  /* ----------------------------------------------------------------------
+     用户搜索选择器：等价桌面版 showAddOrderModal 的「搜索昵称或邮箱 + 下拉选」
+     手机上没法复制 UUID，所以这里必须给可搜索的选择器。
+     用法：
+       userPicker('order_user', { label: '选择用户', required: true })
+       → 拿到容器后调 userPickerBind(container, onPick)
+       表单提交时读 hidden input [data-name="<name>_id"] 的值
+     -------------------------------------------------------------------- */
+  function userPicker(name, opt) {
+    opt = opt || {};
+    return '<div class="field" data-up="' + DS.esc(name) + '">' +
+      '<label>' + DS.esc(opt.label || '选择用户') + (opt.required ? ' <span style="color:var(--danger)">*</span>' : '') + '</label>' +
+      '<input class="inp" type="search" data-up-kw="' + DS.esc(name) + '" enterkeyhint="search"' +
+      ' placeholder="' + DS.esc(opt.placeholder || '搜索昵称 / 邮箱 / 用户名') + '" value="" autocomplete="off">' +
+      '<input type="hidden" data-name="' + DS.esc(name) + '_id" data-kind="text" value="' + DS.esc(opt.value || '') + '">' +
+      '<div data-up-info class="tiny" style="margin-top:6px;color:var(--success);display:none"></div>' +
+      '<div data-up-list style="margin-top:6px"></div>' +
+      (opt.help ? '<div class="help">' + DS.esc(opt.help) + '</div>' : '') +
+      '</div>';
+  }
+
+  /** 把 userPicker 的容器接上搜索逻辑；onPick(user) 在选中时回调 */
+  function userPickerBind(root, onPick) {
+    root = root || document;
+    var holder = root.querySelector ? root.querySelector('[data-up]') : null;
+    if (!holder) return;
+    var name = holder.getAttribute('data-up');
+    var kwEl = holder.querySelector('[data-up-kw]');
+    var idEl = holder.querySelector('[data-name="' + name + '_id"]');
+    var infoEl = holder.querySelector('[data-up-info]');
+    var listEl = holder.querySelector('[data-up-list]');
+    var timer = null;
+
+    function setPicked(u) {
+      idEl.value = u.id;
+      kwEl.value = u.nickname || u.username || u.email || '';
+      infoEl.textContent = '✓ 已选择：' + (u.nickname || u.username || '未设置') +
+        (u.email ? ' <' + u.email + '>' : '') + ' · ' + short(u.id, 8);
+      infoEl.style.display = '';
+      listEl.innerHTML = '';
+      if (onPick) onPick(u);
+    }
+
+    function clearPicked() {
+      idEl.value = '';
+      infoEl.style.display = 'none';
+      infoEl.textContent = '';
+    }
+
+    function render(users) {
+      if (!users.length) {
+        listEl.innerHTML = '<div class="tiny muted" style="padding:8px 0">未找到匹配的用户</div>';
+        return;
+      }
+      listEl.innerHTML = '<ul class="list">' + users.map(function (u) {
+        return '<li class="li" data-up-pick="' + DS.esc(u.id) + '">' +
+          '<div class="li-ic">👤</div>' +
+          '<div class="li-body"><div class="li-title">' + DS.esc(u.nickname || u.username || '未设置') + '</div>' +
+          '<div class="li-sub">' + DS.esc(u.email || short(u.id, 8)) + '</div></div>' +
+          '<div class="li-right">' + statusChip(u.status, 'user') + '</div>' +
+          '</li>';
+      }).join('') + '</ul>';
+    }
+
+    function search() {
+      var kw = orKw(kwEl.value);
+      if (!kw) { listEl.innerHTML = ''; clearPicked(); return; }
+      listEl.innerHTML = '<div class="tiny muted" style="padding:8px 0">搜索中…</div>';
+      DS.api(CONN, 'users', {
+        select: 'id,nickname,username,email,status',
+        orFilter: ilikeOr(['nickname', 'email', 'username'], kw),
+        limit: 12
+      }).then(function (res) {
+        if (res.error) { listEl.innerHTML = '<div class="tiny" style="padding:8px 0;color:var(--danger)">搜索失败：' + DS.esc(res.error.message) + '</div>'; return; }
+        render(res.data || []);
+      });
+    }
+
+    kwEl.addEventListener('input', function () {
+      clearTimeout(timer);
+      var v = kwEl.value;
+      if (!String(v).trim()) { listEl.innerHTML = ''; clearPicked(); return; }
+      timer = setTimeout(search, 300);
+    });
+    kwEl.addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      clearTimeout(timer);
+      search();
+    });
+    listEl.addEventListener('click', function (e) {
+      var li = e.target.closest ? e.target.closest('[data-up-pick]') : null;
+      if (!li) return;
+      var id = li.getAttribute('data-up-pick');
+      DS.api(CONN, 'users', { select: 'id,nickname,username,email,status', filters: { id: id }, limit: 1 })
+        .then(function (res) {
+          var u = (res.data || [])[0];
+          if (u) setPicked(u);
+        });
+    });
+
+    return { clear: clearPicked };
+  }
 
   /** 弹层里的一行键值（转义由 DS.kv 负责） */
   function kvList(items) { return DS.kv(items); }
@@ -1251,45 +1364,61 @@
   }
 
   var PAY_OPTS = [
-    { value: '', label: '未支付' }, { value: 'manual', label: '手动支付' },
-    { value: 'wechat', label: '微信' }, { value: 'alipay', label: '支付宝' }
+    { value: '', label: '未支付' }, { value: 'wechat', label: '微信' },
+    { value: 'alipay', label: '支付宝' }, { value: 'xianyu', label: '闲鱼' },
+    { value: 'manual', label: '手动开通' }
   ];
 
-  /** 等价桌面版 scanShowAddOrderModal：已支付时联动开通授权 */
+  /** 等价桌面版 showAddOrderModal（admin.html:2686）：搜用户 + 切套餐自动填价 + 选支付方式即联动开通 */
   function openOrderForm() {
-    formSheet({
-      title: '创建订单',
-      okText: '创建',
-      html:
-        DS.input({ name: 'user_id', label: '用户 ID', required: true, mono: true, placeholder: 'users 表的 id' }) +
-        DS.select({ name: 'package_type', label: '套餐', value: 'month', options: PKG_TYPES.map(function (pt) { return { value: pt, label: PKG_NAMES[pt] }; }) }) +
-        DS.number({ name: 'amount', label: '金额', value: 19, min: 0, step: '0.01' }) +
-        DS.select({ name: 'payment_method', label: '支付方式', value: '', options: PAY_OPTS }) +
-        '<div class="help">选择支付方式后订单状态为「已支付」，并会联动为该用户开通授权。</div>',
-      onSubmit: function (body) {
-        var d = DS.formData(body);
-        var userId = String(d.user_id || '').trim();
-        if (!userId) { DS.toast('请填写用户 ID', 'err'); return false; }
-        var payMethod = d.payment_method || '';
-        var now = new Date();
-        var orderNo = 'CAD' + Date.now() + Math.floor(Math.random() * 1000);
-        var data = {
-          order_no: orderNo, user_id: userId, package_type: d.package_type,
-          amount: DS.numOr(d.amount, 0), status: payMethod ? 'paid' : 'pending',
-          created_at: now.toISOString()
-        };
-        if (payMethod) { data.payment_method = payMethod; data.paid_at = now.toISOString(); }
-        return DS.api(CONN, 'orders', { method: 'POST', data: data }).then(function (res) {
-          if (res.error) { DS.toast('创建失败：' + res.error.message, 'err'); return false; }
-          var newId = (res.data && res.data[0] && res.data[0].id) || null;
-          logAdmin('create', 'orders', newId, '创建订单 ' + orderNo, data);
-          DS.toast('订单创建成功' + (payMethod ? '，正在联动开通授权…' : ''), 'ok');
-          DS.refresh();
-          if (payMethod) {
-            setTimeout(function () { activateUser(userId, short(userId, 8), d.package_type, true); }, 60);
+    loadPackagesCache().then(function () {
+      formSheet({
+        title: '创建订单',
+        okText: '创建',
+        html:
+          userPicker('order_user', { label: '选择用户', required: true, placeholder: '搜索昵称 / 邮箱 / 用户名' }) +
+          DS.select({
+            name: 'package_type', label: '套餐', value: 'month',
+            options: PKG_TYPES.map(function (pt) { return { value: pt, label: PKG_NAMES[pt] }; })
+          }) +
+          DS.number({ name: 'amount', label: '金额', value: pkgInfoOf('month').price, min: 0, step: '0.01' }) +
+          DS.select({ name: 'payment_method', label: '支付方式', value: '', options: PAY_OPTS }) +
+          '<div class="help">切换套餐会自动带入对应价格，可再手动改。选了支付方式即视为已支付，并会联动为该用户开通授权。</div>',
+        onReady: function (body) {
+          userPickerBind(body);
+          // 等价桌面版 autoFillOrderPrice()：切套餐自动回填金额
+          var pkgSel = body.querySelector('[data-name="package_type"]');
+          var amtEl = body.querySelector('[data-name="amount"]');
+          if (pkgSel && amtEl) {
+            pkgSel.addEventListener('change', function () {
+              amtEl.value = pkgInfoOf(pkgSel.value).price;
+            });
           }
-        });
-      }
+        },
+        onSubmit: function (body) {
+          var d = DS.formData(body);
+          var userId = String(d.order_user_id || '').trim();
+          if (!userId) { DS.toast('请先选择用户', 'err'); return false; }
+          var payMethod = d.payment_method || '';
+          var now = new Date();
+          var data = {
+            order_no: genOrderNo(), user_id: userId, package_type: d.package_type,
+            amount: DS.numOr(d.amount, 0), status: payMethod ? 'paid' : 'pending',
+            created_at: now.toISOString()
+          };
+          if (payMethod) { data.payment_method = payMethod; data.paid_at = now.toISOString(); }
+          return DS.api(CONN, 'orders', { method: 'POST', data: data }).then(function (res) {
+            if (res.error) { DS.toast('创建失败：' + res.error.message, 'err'); return false; }
+            var newId = (res.data && res.data[0] && res.data[0].id) || null;
+            logAdmin('create', 'orders', newId, '创建订单 ' + data.order_no, data);
+            DS.toast('订单创建成功' + (payMethod ? '，正在联动开通授权…' : ''), 'ok');
+            DS.refresh();
+            if (payMethod) {
+              setTimeout(function () { activateUser(userId, short(userId, 8), d.package_type, true); }, 60);
+            }
+          });
+        }
+      });
     });
   }
 
@@ -1298,6 +1427,7 @@
       if (res.error) { DS.toast('读取订单失败：' + res.error.message, 'err'); return; }
       var o = (res.data || [])[0];
       if (!o) { DS.toast('未找到订单', 'err'); return; }
+      var paidVal = o.paid_at ? String(o.paid_at).substring(0, 16) : '';
       formSheet({
         title: '编辑订单',
         okText: '保存',
@@ -1308,7 +1438,11 @@
             { value: 'cancelled', label: '已取消' }, { value: 'refunded', label: '已退款' }
           ] }) +
           DS.number({ name: 'amount', label: '金额', value: DS.numOr(o.amount, 0), min: 0, step: '0.01' }) +
-          DS.select({ name: 'payment_method', label: '支付方式', value: o.payment_method || '', options: PAY_OPTS }),
+          DS.select({ name: 'payment_method', label: '支付方式', value: o.payment_method || '', options: PAY_OPTS }) +
+          DS.input({
+            name: 'paid_at', label: '支付时间', inputType: 'datetime-local', value: paidVal,
+            help: '留空且状态为已支付时，自动填当前时间'
+          }),
         onSubmit: function (body) {
           var d = DS.formData(body);
           var wasPaid = o.status === 'paid';
@@ -1316,9 +1450,9 @@
           var patch = {
             status: d.status,
             amount: DS.numOr(d.amount, 0),
-            payment_method: d.payment_method || null
+            payment_method: d.payment_method || null,
+            paid_at: willPaid ? (d.paid_at ? new Date(d.paid_at).toISOString() : nowISO()) : null
           };
-          if (willPaid && !wasPaid) patch.paid_at = nowISO();
           return safePatch('orders', id, patch).then(function (res) {
             if (res.error) { DS.toast('保存失败：' + res.error.message, 'err'); return false; }
             logAdmin('update', 'orders', id, '编辑订单 ' + (o.order_no || id), patch);
@@ -1355,11 +1489,10 @@
 
   function maybeCreateOrder(userId, packageType, price, when) {
     if (!(price > 0)) return;
-    var orderNo = 'CAD' + Date.now() + Math.floor(Math.random() * 1000);
     DS.api(CONN, 'orders', {
       method: 'POST',
       data: {
-        order_no: orderNo, user_id: userId, package_type: packageType,
+        order_no: genOrderNo(), user_id: userId, package_type: packageType,
         amount: price, status: 'paid', payment_method: 'manual',
         paid_at: (when || new Date()).toISOString()
       }
