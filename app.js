@@ -1256,9 +1256,25 @@
     );
   }
 
+  /**
+   * 显示「本机此刻真正跑的版本」：读 Cache Storage 里的缓存名（dsh-mobile-vNN）。
+   * 这比任何硬编码常量都准 —— Service Worker 的缓存名就是它 activate 时写的 VERSION。
+   * 反推：如果「关于」页看不到这一行，说明手机上还是旧版 app.js（缓存没更新到）。
+   */
+  function fillAboutVersion() {
+    var el = document.getElementById('aboutVer');
+    if (!el) return;
+    if (!(window.caches && caches.keys)) { el.textContent = '此浏览器不支持缓存查询'; return; }
+    caches.keys().then(function (keys) {
+      var mine = keys.filter(function (k) { return k.indexOf('dsh-mobile-') === 0; }).sort();
+      el.textContent = mine.length ? mine.join(' / ') : '未缓存（Service Worker 未注册）';
+    }).catch(function () { el.textContent = '查询失败'; });
+  }
+
   function renderSettingsAbout(box) {
     box.innerHTML =
       card('<div class="kv"><div class="kv-k">应用</div><div class="kv-v">移动后台 · 手机端管理台</div></div>' +
+        '<div class="kv"><div class="kv-k">当前版本</div><div class="kv-v" id="aboutVer">查询中…</div></div>' +
         '<div class="kv"><div class="kv-k">形态</div><div class="kv-v">PWA 网页应用，可"添加到主屏幕"</div></div>' +
         '<div class="kv"><div class="kv-k">已装模块</div><div class="kv-v">' + modules.map(function (m) { return esc(m.name); }).join('、') + '</div></div>' +
         '<div class="kv"><div class="kv-k">运行方式</div><div class="kv-v">纯静态前端，浏览器直连 Supabase，不经过任何中转服务器</div></div>',
@@ -1275,6 +1291,7 @@
         '请务必给手机设置锁屏密码；不要在公共设备上保存 key。<br>' +
         '如果怀疑 key 泄露，到 Supabase 控制台重新生成即可。' +
         '</div>', { tight: true });
+    fillAboutVersion();
   }
 
   function applyTheme() {
