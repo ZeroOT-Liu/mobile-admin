@@ -8,11 +8,17 @@
        · 离线版  机器码 XXXX-XXXX-…   → AES-256-CBC + PBKDF2 授权码（-LYT 结尾）
 
    算法来源（严格对齐，改任何一个参数都会让客户端验签失败）
-     · 离线版：C# 工程 CAD散线转文字_后端/LicenseCore.cs
-               SecurityConfig / CryptoHelper / LicenseGenerator
-     · 工具箱、在线版：4-三端授权/统一授权管理.html
-               （与 C# 端 GenerateLicenseKey 对齐的 HMAC-SHA256 方案）
-     验证脚本：tools/test-license.js（与 Node crypto 及真实 C# 工程交叉验签）
+     · 工具箱 / 在线版：D:\不加班的小刘\C#开发\不加班的小刘_工具箱\不加班的小刘_工具箱授权\MainWindow.xaml.cs
+                        GenerateLicenseKey（权威生成器）
+                        客户端校验：不加班的小刘_工具箱.Acad\LicenseAuth.cs ValidateLicenseKey
+                                    散线转文字\Shared\Offline\OfflineLicenseManager.cs ValidateLicenseKey
+                        格式 PREFIX-{43}-{16}-{8}，body ≥ 69
+     · 离线版：G:\LYT-开发\CAD二次开发\LYT-软件开发\C#\授权系统\开发版\LicenseCore.cs
+               LicenseGenerator.GenerateLicenseKey（生成，AES-256-CBC + PBKDF2）
+               LicenseManager.ValidateLicense（客户端校验）
+               格式 = Base64(明文 + pepper) 每 5 字符插 '-'、末尾 '-LYT'
+               ⚠️ Base64 的 '=' 填充必须保留（客户端 UnformatLicenseKey 只去掉 '-'）
+     验证脚本：tools/test-license.js
 
    连接
      conns: []  —— 本模块**完全不联网**，纯本机计算。
@@ -50,15 +56,24 @@
     lyt: { baseKeyHex: '', baseSaltHex: '', pepperHex: '', secretKeyHex: '' }
   };
 
-  /** 密钥页的字段清单（name 里的 . 表示 lyt 子字段） */
+  /**
+   * 密钥页的字段清单（name 里的 . 表示 lyt 子字段）
+   *
+   * ⚠️ 长度必须与 C# SecurityConfig 的字节数严格对应，填短一位就生成废码，
+   *    而且**不会报错**（客户端只提示"授权码验证失败"），极难排查。
+   *    LicenseCore.cs → SecurityConfig（G:/LYT-开发/…/授权系统/开发版/LicenseCore.cs）
+   */
   var KEY_FIELDS = [
     { name: 'toolbox', label: '工具箱 · HMAC 盐', ph: '粘贴工具箱的盐', hint: '桌面版「统一授权管理.html」源码里的 SECRET_KEYS.toolbox' },
     { name: 'sxzwz', label: '在线版 · HMAC 盐', ph: '粘贴在线版的盐', hint: '桌面版「统一授权管理.html」源码里的 SECRET_KEYS.sxzwz' },
-    { name: 'lyt.baseKeyHex', label: '离线版 · baseKey（HEX）', ph: '64 位十六进制', hint: 'LicenseCore.cs → SecurityConfig._baseKey' },
-    { name: 'lyt.baseSaltHex', label: '离线版 · baseSalt（HEX）', ph: '96 位十六进制', hint: 'LicenseCore.cs → SecurityConfig._baseSalt' },
-    { name: 'lyt.pepperHex', label: '离线版 · pepper（HEX）', ph: '72 位十六进制', hint: 'LicenseCore.cs → SecurityConfig._pepper' },
-    { name: 'lyt.secretKeyHex', label: '离线版 · secretKey（HEX）', ph: '108 位十六进制', hint: 'LicenseCore.cs → SecurityConfig._secretKey' }
+    { name: 'lyt.baseKeyHex', label: '离线版 · baseKey（HEX）', ph: '64 位十六进制', hint: 'LicenseCore.cs → SecurityConfig._baseKey（32 字节）' },
+    { name: 'lyt.baseSaltHex', label: '离线版 · baseSalt（HEX）', ph: '100 位十六进制', hint: 'LicenseCore.cs → SecurityConfig._baseSalt（50 字节）' },
+    { name: 'lyt.pepperHex', label: '离线版 · pepper（HEX）', ph: '80 位十六进制', hint: 'LicenseCore.cs → SecurityConfig._pepper（40 字节）' },
+    { name: 'lyt.secretKeyHex', label: '离线版 · secretKey（HEX）', ph: '110 位十六进制', hint: 'LicenseCore.cs → SecurityConfig._secretKey（55 字节）' }
   ];
+
+  /** 离线版四项密钥的**期望十六进制长度**（照 C# SecurityConfig 字节数 ×2） */
+  var LYT_HEX_LEN = { baseKeyHex: 64, baseSaltHex: 100, pepperHex: 80, secretKeyHex: 110 };
 
   /** 非密钥参数（与 LicenseCore.cs 的 LicenseGenerator 一致，改动会导致验签失败） */
   var LYT = {
@@ -451,6 +466,13 @@
 
   function pad2(n) { return (n < 10 ? '0' : '') + n; }
 
+  /** 等价 C# 端 EnsureLength：等长原样返回；不足右侧补 '0'；超出取前 n 位 */
+  function ensureLength(s, n) {
+    if (s.length === n) return s;
+    if (s.length < n) { var p = s; while (p.length < n) p += '0'; return p; }
+    return s.substring(0, n);
+  }
+
   /** UTC：yyyy-MM-dd HH:mm:ss（等价 C# DateTime.ToString("yyyy-MM-dd HH:mm:ss")） */
   function utcStamp(ms) {
     var d = new Date(ms);
@@ -566,9 +588,19 @@
   }
 
   /**
-   * 工具箱 / 在线版：HMAC-SHA256，等价统一授权管理.html 的 generateHmacLicense
+   * 工具箱 / 在线版：HMAC-SHA256，对齐电脑端权威生成器
+   * （不加班的小刘_工具箱授权/MainWindow.xaml.cs:778 GenerateLicenseKey）
+   *
+   * 格式：{BJXL|SXZWZ}-{coreSig(43)}-{dateToken(16)}-{verify(8)}，共 74 / 75 字符
+   *   coreSig   = Base64URL(完整 HMAC-SHA256(machineHash|datePart|machineCode))  → 43 字符
+   *   dateToken = Base64URL(dateBytes XOR coreSig前12字节 XOR 0x55)              → 16 字符
+   *   verify    = Base64URL(HMAC-SHA256(coreSig + dateToken)) 取前 8 字符        → 8 字符
+   *
+   * ⚠️ 旧版本这里是「取 HMAC 前 12 字节 = 16 字符 / verify 取 7 字符」，
+   *    客户端早已升级并要求 body ≥ 69，旧码一律被拒（提示"授权码格式长度不足"）。
+   *
    * @param {string} machineCode 机器码（BJXL- 或 SXZWZ- 开头）
-   * @param {number} expiryMs 到期时间（毫秒）
+   * @param {number} expiryMs 到期时间（毫秒，本地时间参与编码）
    * @param {string} secretSalt 该端的盐
    */
   function generateHmac(machineCode, expiryMs, secretSalt) {
@@ -584,16 +616,17 @@
       var coreSigData = machineHash + '|' + datePart + '|' + machineCode;
 
       return hmacSha256Async(authSalt, utf8Bytes(coreSigData)).then(function (sig) {
-        var sigBytes = sig.subarray(0, 12);
+        // 完整 HMAC（32 字节 → Base64URL 43 字符）
+        var coreSig = ensureLength(bytesToBase64Url(sig), 43);
+
+        // 日期隐藏：与 coreSig 前 12 字节异或（等价 C# FromBase64Url(coreSig) 前 12 字节）
         var dateBytes = utf8Bytes(datePart);
         var xored = new Uint8Array(12);
-        for (var i = 0; i < 12; i++) xored[i] = dateBytes[i] ^ sigBytes[i] ^ 0x55;
-
-        var coreSig = bytesToBase64Url(sigBytes);
-        var dateToken = bytesToBase64Url(xored);
+        for (var i = 0; i < 12; i++) xored[i] = dateBytes[i] ^ sig[i] ^ 0x55;
+        var dateToken = ensureLength(bytesToBase64Url(xored), 16);
 
         return hmacSha256Async(authSalt, utf8Bytes(coreSig + dateToken)).then(function (vh) {
-          var verify = bytesToBase64Url(vh.subarray(0, 5)).substring(0, 7);
+          var verify = ensureLength(bytesToBase64Url(vh), 8);
           var licenseKey = prefix + '-' + coreSig + '-' + dateToken + '-' + verify;
           return {
             licenseKey: licenseKey,
@@ -623,9 +656,9 @@
   }
 
   /**
-   * HMAC 方案的自检：解回日期并验签，等价桌面版的 selfValidate
+   * HMAC 方案的自检：解回日期并验签，等价客户端 ValidateLicenseKey
    *
-   * ⚠️ 解析必须按**固定位置**切（0-15 / 17-32 / 34-40），不能 split('-')：
+   * ⚠️ 解析必须按**固定位置**切（0-42 / 44-59 / 61-68），不能 split('-')：
    *    base64url 会把 '+' 映射成 '-'，段内自带连字符是正常现象，
    *    客户端（C# ValidateLicenseKey）也是按固定位置解析的。
    */
@@ -635,15 +668,15 @@
     if (!isSx && !isBj) return Promise.resolve('前缀不是 BJXL / SXZWZ');
 
     var body = key.substring(isSx ? 6 : 5);
-    if (body.length < 41) return Promise.resolve('长度不足：' + body.length);
+    if (body.length < 43 + 1 + 16 + 1 + 8) return Promise.resolve('长度不足：' + body.length + '（需 ≥ 69）');
 
-    var cSig = body.substring(0, 16);
-    var dTok = body.substring(17, 33);
-    var vfy = body.substring(34, 41);
+    var cSig = body.substring(0, 43);
+    var dTok = body.substring(44, 60);
+    var vfy = body.substring(61, 69);
 
     return sha256BytesAsync(utf8Bytes(secretSalt)).then(function (authSalt) {
       return hmacSha256Async(authSalt, utf8Bytes(cSig + dTok)).then(function (vh) {
-        var computed = bytesToBase64Url(vh.subarray(0, 5));
+        var computed = ensureLength(bytesToBase64Url(vh), 8);
         if (computed !== vfy) return '签名不匹配';
         return '';
       });
@@ -1054,9 +1087,23 @@
       k.lyt[n] = String(f['lk_lyt_' + n] === undefined ? '' : f['lk_lyt_' + n]).trim();
     });
     // 离线版的四项要么全填要么全空，填一半最容易排查半天
-    var lytFilled = ['baseKeyHex', 'baseSaltHex', 'pepperHex', 'secretKeyHex']
-      .filter(function (n) { return !!k.lyt[n]; }).length;
+    var LYT_KEYS = ['baseKeyHex', 'baseSaltHex', 'pepperHex', 'secretKeyHex'];
+    var lytFilled = LYT_KEYS.filter(function (n) { return !!k.lyt[n]; }).length;
     if (lytFilled > 0 && lytFilled < 4) bad.push('离线版的 4 项密钥要么全填要么全空（现在只填了 ' + lytFilled + ' 项）');
+
+    // 长度/字符校验：填短一位生成的是「看起来正常、客户端却验不过」的废码，先拦住
+    LYT_KEYS.forEach(function (n) {
+      var v = String(k.lyt[n] || '').trim();
+      if (!v) return;
+      var label = '离线版 · ' + n;
+      KEY_FIELDS.forEach(function (fl) { if (fl.name === 'lyt.' + n) label = fl.label; });
+      if (!/^[0-9a-fA-F]+$/.test(v)) { bad.push(label + '：不是纯十六进制字符'); return; }
+      if (v.length !== LYT_HEX_LEN[n]) {
+        bad.push(label + '：长度 ' + v.length + ' 位，应为 ' + LYT_HEX_LEN[n] + ' 位（' +
+          (v.length > LYT_HEX_LEN[n] ? '多了 ' : '少了 ') + Math.abs(v.length - LYT_HEX_LEN[n]) + ' 位）');
+      }
+    });
+
     if (bad.length) { DS.toast(bad[0], 'err'); return; }
     saveKeys(k);
     DS.toast('已保存到本机', 'ok');
